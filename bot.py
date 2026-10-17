@@ -17,7 +17,7 @@ from database import (
 )
 from fpl_service import FPLService
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8934205724:AAFiuwUlxewfvzfRfI3Hw_4RqRtba-z9FNY")
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML", threaded=False)
 
