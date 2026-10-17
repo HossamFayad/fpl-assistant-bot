@@ -112,35 +112,49 @@ MEM_USER_TEAMS: Dict[int, Dict[str, Any]] = {}
 MEM_PROMPT_STATES: Dict[int, str] = {}
 MEM_SETTINGS: Dict[str, str] = {
     "league_code": "",
-    "league_id": "",
-    "league_name": "دوري مساعد الفانتسي الرسمي 🏆"
+    "league_id": "2452525",
+    "league_name": "fpl bot"
 }
 
 def set_bot_setting(key: str, value: str):
     MEM_SETTINGS[key] = str(value)
-    try:
-        conn = get_sqlite_conn()
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO fpl_settings (key, value) VALUES (?, ?)", (key, str(value)))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"[SetSettingError] {e}")
+    if USE_TURSO:
+        turso_execute("INSERT OR REPLACE INTO fpl_settings (key, value) VALUES (?, ?)", [key, str(value)])
+    else:
+        try:
+            conn = get_sqlite_conn()
+            cursor = conn.cursor()
+            cursor.execute("CREATE TABLE IF NOT EXISTS fpl_settings (key TEXT PRIMARY KEY, value TEXT)")
+            cursor.execute("INSERT OR REPLACE INTO fpl_settings (key, value) VALUES (?, ?)", (key, str(value)))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[SetSettingError] {e}")
 
 def get_bot_setting(key: str, default: str = "") -> str:
     if key in MEM_SETTINGS and MEM_SETTINGS[key]:
         return MEM_SETTINGS[key]
-    try:
-        conn = get_sqlite_conn()
-        cursor = conn.cursor()
-        cursor.execute("SELECT value FROM fpl_settings WHERE key = ?", (key,))
-        row = cursor.fetchone()
-        conn.close()
-        if row and row[0]:
-            MEM_SETTINGS[key] = row[0]
-            return row[0]
-    except Exception:
-        pass
+    if USE_TURSO:
+        try:
+            res = turso_execute("SELECT value FROM fpl_settings WHERE key = ?", [key])
+            if res and res[0].get("value"):
+                MEM_SETTINGS[key] = res[0]["value"]
+                return res[0]["value"]
+        except Exception:
+            pass
+    else:
+        try:
+            conn = get_sqlite_conn()
+            cursor = conn.cursor()
+            cursor.execute("CREATE TABLE IF NOT EXISTS fpl_settings (key TEXT PRIMARY KEY, value TEXT)")
+            cursor.execute("SELECT value FROM fpl_settings WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            conn.close()
+            if row and row[0]:
+                MEM_SETTINGS[key] = row[0]
+                return row[0]
+        except Exception:
+            pass
     return default
 
 def save_user_team(telegram_id: int, team_id: int, team_name: str = "", manager_name: str = ""):
