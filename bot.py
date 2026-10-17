@@ -24,6 +24,7 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML", threaded=False)
 def get_main_menu_markup(telegram_id: int = None):
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_rmt = types.InlineKeyboardButton("🔍 تحليل فريقي (Rate My Team)", callback_data="btn_rmt")
+    btn_transfer = types.InlineKeyboardButton("🔄 اقتراح تبديل ذكي (مين تبيع وتشتري)", callback_data="btn_transfers")
     btn_captain = types.InlineKeyboardButton("👑 ترشيحات الكابتن", callback_data="btn_captain")
     btn_compare = types.InlineKeyboardButton("⚔️ مقارنة لاعبين", callback_data="btn_compare_prompt")
     btn_price = types.InlineKeyboardButton("📈 رادار تغير الأسعار", callback_data="btn_price_watch")
@@ -32,6 +33,7 @@ def get_main_menu_markup(telegram_id: int = None):
     btn_guide = types.InlineKeyboardButton("ℹ️ كيف تعرف رقم فريقك؟", callback_data="btn_help_id")
     
     markup.add(btn_rmt)
+    markup.add(btn_transfer)
     markup.add(btn_captain, btn_compare)
     markup.add(btn_price, btn_deadline)
     markup.add(btn_save, btn_guide)
@@ -93,6 +95,50 @@ def handle_rmt_command(message):
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton("🔙 إلغاء والعودة", callback_data="btn_main_menu"))
             bot.send_message(telegram_id, text, reply_markup=markup)
+
+@bot.message_handler(commands=['transfer', 'transfers'])
+def handle_transfer_command(message):
+    telegram_id = message.chat.id
+    parts = message.text.split()
+    if len(parts) > 1 and parts[1].strip().isdigit():
+        team_id = int(parts[1].strip())
+        bot.send_message(telegram_id, "⏳ جاري فحص تشكيلة فريقك وتحديد أنسب التبديلات...")
+        report, entry = FPLService.get_team_transfers(team_id)
+        if entry:
+            save_user_team(telegram_id, team_id, entry.get("name", ""), entry.get("player_first_name", ""))
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+        bot.send_message(telegram_id, report, reply_markup=markup)
+    else:
+        saved = get_user_team(telegram_id)
+        if saved and saved.get("team_id"):
+            bot.send_message(telegram_id, f"⏳ جاري فحص تشكيلة فريقك المسجل (<b>{saved.get('team_name', 'فريقي')}</b>) وتحديد أنسب التبديلات...")
+            report, _ = FPLService.get_team_transfers(int(saved["team_id"]))
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+            bot.send_message(telegram_id, report, reply_markup=markup)
+        else:
+            set_prompt_state(telegram_id, "waiting_team_id_transfer")
+            text = (
+                "🔄 <b>اقتراح تبديل ذكي (مين تبيع ومين تشتري):</b>\n\n"
+                "أرسل الآن في الشات <b>رقم الـ ID بتاع فريقك</b> في الفانتسي (أرقام فقط)."
+            )
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🔙 إلغاء والعودة", callback_data="btn_main_menu"))
+            bot.send_message(telegram_id, text, reply_markup=markup)
+
+@bot.message_handler(commands=['swap', 'replace'])
+def handle_swap_command(message):
+    telegram_id = message.chat.id
+    q = message.text.replace("/swap", "").replace("/replace", "").strip()
+    if q:
+        bot.send_message(telegram_id, f"⏳ جاري البحث عن أفضل بدلاء للاعب {q}...")
+        res = FPLService.find_player_swap(q)
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+        bot.send_message(telegram_id, res, reply_markup=markup)
+    else:
+        bot.send_message(telegram_id, "⚠️ اكتب اسم اللاعب بعد الأمر، مثلاً: <code>/swap بالمر</code> أو <code>/swap Haaland</code>")
 
 @bot.message_handler(commands=['captain', 'cap'])
 def handle_captain_command(message):
@@ -177,23 +223,52 @@ def handle_text_messages(message):
     text_val = message.text.strip()
     state = get_prompt_state(telegram_id)
     
-    # PRIORITY 1: If user sent any number, treat it immediately as FPL Team ID!
+    # PRIORITY 1: If user sent any number, treat it as FPL Team ID!
     if text_val.isdigit():
-        clear_prompt_state(telegram_id)
         team_id = int(text_val)
-        bot.send_message(telegram_id, "⏳ جاري سحب بيانات تشكيلتك من سيرفرات البريميرليج وفحصها...")
-        try:
-            report, entry = FPLService.get_team_analysis(team_id)
-            if entry:
-                save_user_team(telegram_id, team_id, entry.get("name", ""), entry.get("player_first_name", ""))
+        if state == "waiting_team_id_transfer":
+            clear_prompt_state(telegram_id)
+            bot.send_message(telegram_id, "⏳ جاري فحص تشكيلة فريقك وتحديد أنسب التبديلات من سيرفرات البريميرليج...")
+            try:
+                report, entry = FPLService.get_team_transfers(team_id)
+                if entry:
+                    save_user_team(telegram_id, team_id, entry.get("name", ""), entry.get("player_first_name", ""))
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton("🔍 فحص التشكيلة كاملة (RMT)", callback_data="btn_rmt"))
+                markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+                bot.send_message(telegram_id, report, reply_markup=markup)
+            except Exception as e:
+                print(f"[TransferError] {e}")
+                bot.send_message(telegram_id, "⚠️ حدث خطأ أثناء فحص التبديلات. تأكد من صحة رقم الفريق.")
+            return
+        else:
+            clear_prompt_state(telegram_id)
+            bot.send_message(telegram_id, "⏳ جاري سحب بيانات تشكيلتك من سيرفرات البريميرليج وفحصها...")
+            try:
+                report, entry = FPLService.get_team_analysis(team_id)
+                if entry:
+                    save_user_team(telegram_id, team_id, entry.get("name", ""), entry.get("player_first_name", ""))
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton("🔄 اقترح عليّ تبديلاً لهذا الفريق", callback_data="btn_transfers"))
+                markup.add(types.InlineKeyboardButton("🔄 فحص فريق آخر", callback_data="btn_rmt_new"))
+                markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+                bot.send_message(telegram_id, report, reply_markup=markup)
+            except Exception as e:
+                print(f"[RMTException] {e}")
+                bot.send_message(telegram_id, "⚠️ حدث خطأ أثناء فحص الفريق. تأكد من أن رقم الـ ID صحيح (رقم فريقك وليس رقم دوري).")
+            return
+
+    # PRIORITY 2: Check for swap requests (e.g. "بديل ايزاك" or "swap Haaland")
+    clean_lower = text_val.lower()
+    if clean_lower.startswith("بديل ") or clean_lower.startswith("swap "):
+        p_name = text_val.replace("بديل ", "").replace("swap ", "").replace("Swap ", "").strip()
+        if p_name:
+            bot.send_message(telegram_id, f"⏳ جاري البحث عن أفضل بدلاء للاعب {p_name}...")
+            res = FPLService.find_player_swap(p_name)
             markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("🔄 فحص فريق آخر", callback_data="btn_rmt_new"))
             markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
-            bot.send_message(telegram_id, report, reply_markup=markup)
-        except Exception as e:
-            print(f"[RMTException] {e}")
-            bot.send_message(telegram_id, "⚠️ حدث خطأ أثناء فحص الفريق. تأكد من أن رقم الـ ID صحيح (رقم فريقك وليس رقم دوري).")
-        return
+            bot.send_message(telegram_id, res, reply_markup=markup)
+            return
             
     elif state == "waiting_compare_names":
         clear_prompt_state(telegram_id)
@@ -300,6 +375,41 @@ def handle_callbacks(call):
     elif data == "btn_rmt_new":
         set_prompt_state(telegram_id, "waiting_team_id_rmt")
         text = "🔍 أرسل الآن في الشات رقم الـ ID بتاع الفريق الذي تريد فحصه (أرقام فقط):"
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 إلغاء", callback_data="btn_main_menu"))
+        bot.send_message(telegram_id, text, reply_markup=markup)
+        return
+
+    elif data == "btn_transfers":
+        saved = get_user_team(telegram_id)
+        if saved and saved.get("team_id"):
+            bot.send_message(telegram_id, f"⏳ جاري فحص تشكيلة فريقك المسجل (<b>{saved.get('team_name', 'فريقي')}</b>) وتحديد أنسب التبديلات...")
+            try:
+                report, _ = FPLService.get_team_transfers(int(saved["team_id"]))
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton("🔄 فحص تبديلات فريق آخر", callback_data="btn_transfers_prompt"))
+                markup.add(types.InlineKeyboardButton("🔍 فحص التشكيلة كاملة (RMT)", callback_data="btn_rmt"))
+                markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+                bot.send_message(telegram_id, report, reply_markup=markup)
+            except Exception as e:
+                print(f"[TransferCallbackError] {e}")
+                bot.send_message(telegram_id, "⚠️ تعذر جلب توصيات التبديلات حالياً، أرسل رقم فريقك مرة أخرى لتحديثه.")
+        else:
+            set_prompt_state(telegram_id, "waiting_team_id_transfer")
+            text = (
+                "🔄 <b>اقتراح تبديل ذكي (مين تبيع ومين تشتري):</b>\n\n"
+                "أرسل الآن في الشات <b>رقم الـ ID بتاع فريقك</b> في الفانتسي (أرقام فقط).\n\n"
+                "💡 <i>(لو مش عارف رقم فريقك، اضغط على زر 'كيف أجد رقم فريقي').</i>"
+            )
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("ℹ️ كيف أجد رقم فريقي؟", callback_data="btn_help_id"))
+            markup.add(types.InlineKeyboardButton("🔙 إلغاء", callback_data="btn_main_menu"))
+            bot.send_message(telegram_id, text, reply_markup=markup)
+        return
+
+    elif data == "btn_transfers_prompt":
+        set_prompt_state(telegram_id, "waiting_team_id_transfer")
+        text = "🔄 أرسل الآن في الشات رقم الـ ID بتاع الفريق الذي تريد اقتراح تبديلات له (أرقام فقط):"
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🔙 إلغاء", callback_data="btn_main_menu"))
         bot.send_message(telegram_id, text, reply_markup=markup)

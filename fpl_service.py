@@ -548,3 +548,218 @@ class FPLService:
             text += "⚖️ <b>النتيجة:</b> أرقام اللاعبين متقاربة جداً؛ الفيصل هو سهولة المباريات القادمة!"
             
         return text
+
+    @classmethod
+    def find_replacements(cls, pos_id: int, max_cost: float, exclude_ids: List[int] = None, top_n: int = 3) -> List[Dict[str, Any]]:
+        if not exclude_ids:
+            exclude_ids = []
+        players = cls.get_players_list()
+        candidates = []
+        for p in players:
+            if p["id"] in exclude_ids:
+                continue
+            if p.get("element_type") != pos_id:
+                continue
+            cost = p.get("now_cost", 0) / 10.0
+            if cost > max_cost:
+                continue
+            if p.get("status") not in ["a", "d"]:
+                continue
+                
+            try:
+                form = float(p.get("form", 0.0))
+                total_pts = int(p.get("total_points", 0))
+                if total_pts < 10 and form < 2.0:
+                    continue
+                    
+                fixs = cls.get_player_upcoming_fixtures(p, count=3)
+                if not fixs:
+                    continue
+                fdr_avg = sum(f["fdr"] for f in fixs) / len(fixs)
+                
+                # Score: high form, low FDR, solid points baseline
+                score = (form * 2.2) + (total_pts * 0.1) + ((5.0 - fdr_avg) * 3.5)
+                candidates.append({
+                    "player": p,
+                    "score": score,
+                    "cost": cost,
+                    "form": form,
+                    "total_pts": total_pts,
+                    "fixs": fixs,
+                    "fdr_avg": fdr_avg
+                })
+            except Exception:
+                continue
+                
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+        return candidates[:top_n]
+
+    @classmethod
+    def get_team_transfers(cls, team_id: int) -> Tuple[str, Optional[Dict[str, Any]]]:
+        entry_data = _get_with_cache(FPL_ENTRY_URL.format(team_id=team_id), ttl=120)
+        if not entry_data or "id" not in entry_data:
+            return ("⚠️ لم نتمكن من العثور على فريق بهذا الرقم! تأكد من إدخال رقم الـ ID الصحيح لفريقك في الفانتسي.", None)
+            
+        team_name = entry_data.get("name", "فريقي")
+        curr_ev = entry_data.get("current_event")
+        if not curr_ev:
+            curr, _ = cls.get_current_and_next_gw()
+            curr_ev = curr.get("id") if curr else 1
+            
+        picks_data = None
+        for try_gw in range(curr_ev, 0, -1):
+            p_data = _get_with_cache(FPL_PICKS_URL.format(team_id=team_id, gw=try_gw), ttl=120)
+            if p_data and "picks" in p_data and len(p_data.get("picks", [])) > 0:
+                picks_data = p_data
+                break
+                
+        if not picks_data or "picks" not in picks_data:
+            return (f"✅ تم العثور على فريق <b>{team_name}</b> ولكن تشكيلة الجولة لم تكتمل بعد.", entry_data)
+            
+        bank = picks_data.get("entry_history", {}).get("bank", 0) / 10.0
+        picks = picks_data.get("picks", [])
+        team_player_ids = [p["element"] for p in picks]
+        players_dict = {p["id"]: p for p in cls.get_players_list()}
+        teams_dict = cls.get_teams_dict()
+        
+        # Score every player in team for SELL PRIORITY
+        sell_candidates = []
+        for pick in picks:
+            pid = pick.get("element")
+            p = players_dict.get(pid, {})
+            if not p:
+                continue
+                
+            status = p.get("status", "a")
+            chance = p.get("chance_of_playing_next_round")
+            form = float(p.get("form", 0.0))
+            cost = p.get("now_cost", 0) / 10.0
+            fixs = cls.get_player_upcoming_fixtures(p, count=3)
+            fdr_avg = (sum(f["fdr"] for f in fixs) / len(fixs)) if fixs else 3.0
+            
+            urgency = 0
+            reasons = []
+            
+            if status in ["i", "s", "u"]:
+                urgency += 80
+                reasons.append(p.get("news", "مصاب أو موقوف"))
+            elif status == "d" or (chance is not None and chance <= 50):
+                urgency += 50
+                reasons.append(p.get("news", "شكوك قوية حول مشاركته"))
+            elif fdr_avg >= 3.6:
+                urgency += 25
+                reasons.append(f"مباريات قادمة صعبة (متوسط صعوبة {fdr_avg:.1f})")
+                
+            if form < 2.0 and cost >= 6.0:
+                urgency += 20
+                reasons.append(f"تراجع حاد في الفورمة ({form})")
+                
+            sell_candidates.append({
+                "player": p,
+                "urgency": urgency,
+                "reasons": reasons,
+                "cost": cost,
+                "pos_id": p.get("element_type", 1),
+                "fdr_avg": fdr_avg
+            })
+            
+        sell_candidates.sort(key=lambda x: x["urgency"], reverse=True)
+        worst = sell_candidates[0] if sell_candidates else None
+        
+        if not worst or (worst["urgency"] == 0 and worst["fdr_avg"] <= 3.0):
+            worst = min(sell_candidates, key=lambda x: float(x["player"].get("form", 0.0)))
+            
+        sell_player = worst["player"]
+        sell_cost = worst["cost"]
+        pos_id = worst["pos_id"]
+        pos_info = POSITION_MAP.get(pos_id, {"name": "لاعب", "emoji": "⚽"})
+        sell_team = teams_dict.get(sell_player.get("team"), {}).get("short_name", "")
+        sell_reasons = " ، ".join(worst["reasons"]) if worst["reasons"] else "انخفاض المردود الهجومي/الدفاعي مؤخراً"
+        
+        # Available budget
+        max_buy_budget = round(sell_cost + bank, 1)
+        
+        # Find top replacements
+        buys = cls.find_replacements(
+            pos_id=pos_id,
+            max_cost=max_buy_budget,
+            exclude_ids=team_player_ids,
+            top_n=3
+        )
+        
+        text = (
+            f"🔄 <b>توصيات التبديلات الذكية لفريقك (Transfer Advisor):</b>\n\n"
+            f"🛡️ الفريق: <b>{team_name}</b> | الميزانية في البنك: <b>£{bank:.1f}m</b>\n\n"
+            f"🔴 <b>اللاعب الأكثر ترشيحاً للبيع (Sell Priority):</b>\n"
+            f"• {pos_info['emoji']} <b>{sell_player.get('web_name')}</b> ({sell_team} - £{sell_cost:.1f}m)\n"
+            f"⚠️ <b>سبب البيع:</b> {sell_reasons}\n"
+            f"💰 ميزانيتك المتاحة للشراء مكانه: <b>£{max_buy_budget:.1f}m</b>\n\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🟢 <b>أفضل 3 بدلاء مقترحين للشراء مكانه (Buy Options):</b>\n\n"
+        )
+        
+        if buys:
+            ranks = ["1️⃣", "2️⃣", "3️⃣"]
+            for i, b in enumerate(buys):
+                bp = b["player"]
+                bt = teams_dict.get(bp.get("team"), {}).get("short_name", "")
+                fix_strs = []
+                for fx in b["fixs"]:
+                    ha = "H" if fx["is_home"] else "A"
+                    fix_strs.append(f"{fx['opp_short']}({ha}) {cls.format_fdr_emoji(fx['fdr'])}")
+                fix_text = " | ".join(fix_strs)
+                savings = round(max_buy_budget - b["cost"], 1)
+                sav_str = f"(يوفر £{savings:.1f}m في البنك)" if savings > 0 else "(يستغل كامل الميزانية)"
+                
+                text += (
+                    f"{ranks[i]} <b>{bp.get('web_name')}</b> ({bt} - £{b['cost']:.1f}m) {sav_str}\n"
+                    f"   • الفورمة: <b>{b['form']}</b> | إجمالي النقاط: <b>{b['total_pts']}</b>\n"
+                    f"   • المباريات الـ 3 القادمة: {fix_text}\n\n"
+                )
+        else:
+            text += "لا يوجد بدلاء مميزين في حدود هذه الميزانية حالياً، فكّر في ترحيل التبديل.\n\n"
+            
+        text += "💡 <i>الخوارزمية تفحص: نسبة الإصابات، سهولة جدول المباريات الـ 3 القادمة (FDR)، والفورمة التهديفية.</i>"
+        return (text, entry_data)
+
+    @classmethod
+    def find_player_swap(cls, player_name: str) -> str:
+        p = cls.search_player(player_name)
+        if not p:
+            return f"⚠️ تعذر العثور على لاعب باسم: {player_name}"
+            
+        pos_id = p.get("element_type", 1)
+        pos_info = POSITION_MAP.get(pos_id, {"name": "لاعب", "emoji": "⚽"})
+        cost = p.get("now_cost", 0) / 10.0
+        teams_dict = cls.get_teams_dict()
+        t_short = teams_dict.get(p.get("team"), {}).get("short_name", "")
+        
+        # Search for replacements up to player price + 0.5
+        max_cost = cost + 0.5
+        buys = cls.find_replacements(pos_id=pos_id, max_cost=max_cost, exclude_ids=[p["id"]], top_n=3)
+        
+        text = (
+            f"🔄 <b>أفضل البدلاء المقترحين للاعب {p.get('web_name')}:</b>\n\n"
+            f"🔴 اللاعب المراد استبداله: {pos_info['emoji']} <b>{p.get('web_name')}</b> ({t_short} - £{cost:.1f}m)\n\n"
+            f"🟢 <b>أفضل 3 خيارات شراء في نفس المركز والحدود السعرية:</b>\n\n"
+        )
+        if buys:
+            ranks = ["1️⃣", "2️⃣", "3️⃣"]
+            for i, b in enumerate(buys):
+                bp = b["player"]
+                bt = teams_dict.get(bp.get("team"), {}).get("short_name", "")
+                fix_strs = []
+                for fx in b["fixs"]:
+                    ha = "H" if fx["is_home"] else "A"
+                    fix_strs.append(f"{fx['opp_short']}({ha}) {cls.format_fdr_emoji(fx['fdr'])}")
+                fix_text = " | ".join(fix_strs)
+                
+                text += (
+                    f"{ranks[i]} <b>{bp.get('web_name')}</b> ({bt} - £{b['cost']:.1f}m)\n"
+                    f"   • الفورمة: <b>{b['form']}</b> | النقاط: <b>{b['total_pts']}</b>\n"
+                    f"   • المباريات القادمة: {fix_text}\n\n"
+                )
+        else:
+            text += "لا يوجد بدلاء مميزين في حدود هذه الميزانية حالياً.\n\n"
+            
+        return text
