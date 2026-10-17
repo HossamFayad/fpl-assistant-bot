@@ -279,9 +279,12 @@ def handle_league_command(message):
     l_id = int(l_id_str) if l_id_str and l_id_str.isdigit() else None
     
     text, join_url = FPLService.get_league_info(code, l_id)
-    markup = types.InlineKeyboardMarkup()
+    markup = types.InlineKeyboardMarkup(row_width=1)
     if join_url:
-        markup.add(types.InlineKeyboardButton("🚀 انضم للدوري مباشرة", url=join_url))
+        markup.add(
+            types.InlineKeyboardButton("🌐 انضم للدوري (موقع الفانتسي الرسمي)", url=join_url),
+            types.InlineKeyboardButton("📱 انضم للدوري (تطبيق FFM)", url=f"https://fantasyfootballmanager.app/join/{code}")
+        )
     markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
     bot.send_message(telegram_id, text, reply_markup=markup)
 
@@ -448,9 +451,12 @@ def handle_text_messages(message):
         l_id_str = get_bot_setting("league_id", "")
         l_id = int(l_id_str) if l_id_str and l_id_str.isdigit() else None
         text, join_url = FPLService.get_league_info(code, l_id)
-        markup = types.InlineKeyboardMarkup()
+        markup = types.InlineKeyboardMarkup(row_width=1)
         if join_url:
-            markup.add(types.InlineKeyboardButton("🚀 انضم للدوري مباشرة", url=join_url))
+            markup.add(
+                types.InlineKeyboardButton("🌐 انضم للدوري (موقع الفانتسي الرسمي)", url=join_url),
+                types.InlineKeyboardButton("📱 انضم للدوري (تطبيق FFM)", url=f"https://fantasyfootballmanager.app/join/{code}")
+            )
         markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
         bot.send_message(telegram_id, text, reply_markup=markup)
         return
@@ -705,9 +711,12 @@ def handle_callbacks(call):
         l_id = int(l_id_str) if l_id_str and l_id_str.isdigit() else None
         
         text, join_url = FPLService.get_league_info(code, l_id)
-        markup = types.InlineKeyboardMarkup()
+        markup = types.InlineKeyboardMarkup(row_width=1)
         if join_url:
-            markup.add(types.InlineKeyboardButton("🚀 انضم للدوري مباشرة", url=join_url))
+            markup.add(
+                types.InlineKeyboardButton("🌐 انضم للدوري (موقع الفانتسي الرسمي)", url=join_url),
+                types.InlineKeyboardButton("📱 انضم للدوري (تطبيق FFM)", url=f"https://fantasyfootballmanager.app/join/{code}")
+            )
         markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
         bot.send_message(telegram_id, text, reply_markup=markup)
         return

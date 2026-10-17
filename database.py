@@ -111,7 +111,7 @@ def init_db():
 MEM_USER_TEAMS: Dict[int, Dict[str, Any]] = {}
 MEM_PROMPT_STATES: Dict[int, str] = {}
 MEM_SETTINGS: Dict[str, str] = {
-    "league_code": "",
+    "league_code": "vsbemi",
     "league_id": "2452525",
     "league_name": "fpl bot"
 }
