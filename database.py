@@ -89,19 +89,59 @@ def init_db():
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """
+    sql3 = """
+    CREATE TABLE IF NOT EXISTS fpl_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    );
+    """
     if USE_TURSO:
         turso_execute(sql1)
         turso_execute(sql2)
+        turso_execute(sql3)
     else:
         conn = get_sqlite_conn()
         cursor = conn.cursor()
         cursor.execute(sql1)
         cursor.execute(sql2)
+        cursor.execute(sql3)
         conn.commit()
         conn.close()
 
 MEM_USER_TEAMS: Dict[int, Dict[str, Any]] = {}
 MEM_PROMPT_STATES: Dict[int, str] = {}
+MEM_SETTINGS: Dict[str, str] = {
+    "league_code": "",
+    "league_id": "",
+    "league_name": "دوري مساعد الفانتسي الرسمي 🏆"
+}
+
+def set_bot_setting(key: str, value: str):
+    MEM_SETTINGS[key] = str(value)
+    try:
+        conn = get_sqlite_conn()
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO fpl_settings (key, value) VALUES (?, ?)", (key, str(value)))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[SetSettingError] {e}")
+
+def get_bot_setting(key: str, default: str = "") -> str:
+    if key in MEM_SETTINGS and MEM_SETTINGS[key]:
+        return MEM_SETTINGS[key]
+    try:
+        conn = get_sqlite_conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM fpl_settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        conn.close()
+        if row and row[0]:
+            MEM_SETTINGS[key] = row[0]
+            return row[0]
+    except Exception:
+        pass
+    return default
 
 def save_user_team(telegram_id: int, team_id: int, team_name: str = "", manager_name: str = ""):
     t_id = int(telegram_id)

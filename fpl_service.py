@@ -1078,3 +1078,46 @@ class FPLService:
             + "\n\n💡 <i>الفكرة: توفير ميزانية خط الوسط والهجوم باللعب دائماً بالمدافع صاحب المواجهة الأسهل.</i>"
         )
         return text
+
+    @classmethod
+    def get_league_info(cls, league_code: str = "", league_id: Optional[int] = None) -> Tuple[str, Optional[str]]:
+        if not league_code:
+            text = (
+                "🏆 <b>دوري بوت الفانتسي الرسمي (FPL Assistant Bot League)</b>\n\n"
+                "🔥 يتم حالياً تجهيز كود الدوري الرسمي لمستخدمي البوت للتنافس طوال الموسم!\n\n"
+                "💡 <i>المشرف يستطيع تفعيل الكود عبر أمر: <code>/setleague CODE</code></i>"
+            )
+            return text, None
+
+        join_url = f"https://fantasy.premierleague.com/leagues/auto-join/{league_code}"
+        
+        standings_text = ""
+        league_title = "دوري مساعد الفانتسي الرسمي 🏆"
+        
+        if league_id:
+            url = f"https://fantasy.premierleague.com/api/leagues-classic/{league_id}/standings/"
+            data = _get_with_cache(url, ttl=300)
+            if data and "league" in data and "standings" in data:
+                l_info = data["league"]
+                league_title = l_info.get("name", league_title)
+                results = data["standings"].get("results", [])
+                
+                if results:
+                    standings_text = f"\n\n📊 <b>أوائل ترتيب الدوري حالياً (Top 5):</b>\n"
+                    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+                    for idx, r in enumerate(results[:5]):
+                        medal = medals[idx] if idx < len(medals) else f"{idx+1}."
+                        standings_text += f"{medal} <b>{r.get('entry_name')}</b> ({r.get('player_name')}) — <b>{r.get('total')}</b> نقطة\n"
+
+        text = (
+            f"🏆 <b>{league_title}</b>\n\n"
+            f"🔑 <b>كود الدوري (League Code):</b>\n"
+            f"<code>{league_code}</code> <i>(اضغط عليه لنسخه)</i>\n\n"
+            "📲 <b>طريقة الانضمام السريعة:</b>\n"
+            f"1. اضغط على زر <b>'انضم للدوري مباشرة'</b> بالأسفل.\n"
+            "2. أو افتح موقع/تطبيق الفانتسي ⬅️ Leagues & Cup ⬅️ Join League ⬅️ الصق الكود أعلاه."
+            f"{standings_text}\n\n"
+            "⚽ <i>نافس باقي مستخدمي البوت واثبت أنك المدرب الأفضل هذا الموسم!</i>"
+        )
+        return text, join_url
+

@@ -13,7 +13,9 @@ from database import (
     clear_prompt_state,
     get_all_user_ids,
     get_stats,
-    is_admin
+    is_admin,
+    set_bot_setting,
+    get_bot_setting
 )
 from fpl_service import FPLService
 
@@ -32,6 +34,7 @@ def get_main_menu_markup(telegram_id: int = None):
     btn_compare = types.InlineKeyboardButton("⚔️ مقارنة لاعبين", callback_data="btn_compare_prompt")
     btn_setpiece = types.InlineKeyboardButton("🎯 مسددو الجزاء والكرات الثابتة", callback_data="btn_setpiece")
     btn_rotation = types.InlineKeyboardButton("🛡️ التدوير الدفاعي الرخيص (£4.5m)", callback_data="btn_rotation")
+    btn_league = types.InlineKeyboardButton("🏆 دوري البوت الرسمي (Mini-League)", callback_data="btn_league")
     btn_price = types.InlineKeyboardButton("📈 رادار تغير الأسعار", callback_data="btn_price_watch")
     btn_deadline = types.InlineKeyboardButton("⏳ موعد الديدلاين", callback_data="btn_deadline")
     btn_save = types.InlineKeyboardButton("💾 حفظ رقم فريقي", callback_data="btn_save_team_prompt")
@@ -43,6 +46,7 @@ def get_main_menu_markup(telegram_id: int = None):
     markup.add(btn_captain, btn_diff)
     markup.add(btn_hit, btn_compare)
     markup.add(btn_setpiece, btn_rotation)
+    markup.add(btn_league)
     markup.add(btn_price, btn_deadline)
     markup.add(btn_save, btn_guide)
     
@@ -66,10 +70,16 @@ def handle_start(message):
     gw_name = dl_info.get("gw_name", "الجولة القادمة")
     countdown = dl_info.get("countdown", "")
     
+    league_code = get_bot_setting("league_code", "")
+    league_note = ""
+    if league_code:
+        league_note = f"🏆 <b>دوري البوت الرسمي:</b> كود: <code>{league_code}</code> <i>(اضغط زر الدوري بالأسفل للانضمام)</i>\n\n"
+    
     text = (
         "⚽ <b>مرحباً بك في المساعد الذكي لفانتسي الدوري الإنجليزي (FPL Assistant)</b> 🏆\n\n"
         f"📅 <b>{gw_name}:</b>\n{countdown}\n\n"
         f"🛡️ <b>فريقك المسجل:</b>\n{saved_info}\n\n"
+        f"{league_note}"
         "👇 <b>اختر من الخدمات الذكية أدناه:</b>"
     )
     bot.send_message(telegram_id, text, reply_markup=get_main_menu_markup(telegram_id))
@@ -261,6 +271,51 @@ def handle_rotation_command(message):
     markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
     bot.send_message(telegram_id, text, reply_markup=markup)
 
+@bot.message_handler(commands=['league', 'dory'])
+def handle_league_command(message):
+    telegram_id = message.chat.id
+    code = get_bot_setting("league_code", "")
+    l_id_str = get_bot_setting("league_id", "")
+    l_id = int(l_id_str) if l_id_str and l_id_str.isdigit() else None
+    
+    text, join_url = FPLService.get_league_info(code, l_id)
+    markup = types.InlineKeyboardMarkup()
+    if join_url:
+        markup.add(types.InlineKeyboardButton("🚀 انضم للدوري مباشرة", url=join_url))
+    markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+    bot.send_message(telegram_id, text, reply_markup=markup)
+
+@bot.message_handler(commands=['setleague'])
+def handle_setleague_command(message):
+    telegram_id = message.chat.id
+    if not is_admin(telegram_id):
+        bot.send_message(telegram_id, "⛔ هذا الأمر مخصص لإدارة البوت فقط.")
+        return
+        
+    parts = message.text.replace("/setleague", "").strip().split()
+    if not parts:
+        cur_code = get_bot_setting("league_code", "غير محدد بعد")
+        cur_id = get_bot_setting("league_id", "غير محدد")
+        text = (
+            "⚙️ <b>إعدادات دوري البوت:</b>\n\n"
+            f"• كود الدوري الحالي: <code>{cur_code}</code>\n"
+            f"• آيدي الدوري الحالي: <code>{cur_id}</code>\n\n"
+            "لتغيير الكود أو الآيدي، اكتب:\n"
+            "<code>/setleague CODE</code>\n"
+            "أو مع رقم آيدي الدوري لعرض الترتيب:\n"
+            "<code>/setleague CODE LEAGUE_ID</code>"
+        )
+        bot.send_message(telegram_id, text)
+        return
+        
+    new_code = parts[0]
+    set_bot_setting("league_code", new_code)
+    if len(parts) > 1 and parts[1].isdigit():
+        set_bot_setting("league_id", parts[1])
+        bot.send_message(telegram_id, f"✅ تم حفظ كود الدوري: <code>{new_code}</code> ورقم الآيدي: <code>{parts[1]}</code> بنجاح!")
+    else:
+        bot.send_message(telegram_id, f"✅ تم حفظ كود الدوري: <code>{new_code}</code> بنجاح!")
+
 @bot.message_handler(commands=['admin'])
 def handle_admin_command(message):
     telegram_id = message.chat.id
@@ -372,7 +427,34 @@ def handle_text_messages(message):
         bot.send_message(telegram_id, f"✅ تم إرسال الإعلان بنجاح إلى <b>{sent}</b> مستخدم!")
         return
 
+    elif is_admin(telegram_id) and state == "waiting_admin_league_code":
+        clear_prompt_state(telegram_id)
+        parts = text_val.split()
+        if parts:
+            code = parts[0]
+            set_bot_setting("league_code", code)
+            if len(parts) > 1 and parts[1].isdigit():
+                set_bot_setting("league_id", parts[1])
+                bot.send_message(telegram_id, f"✅ تم حفظ كود الدوري: <code>{code}</code> والآيدي: <code>{parts[1]}</code> بنجاح!")
+            else:
+                bot.send_message(telegram_id, f"✅ تم حفظ كود الدوري بنجاح: <code>{code}</code>!")
+        else:
+            bot.send_message(telegram_id, "⚠️ لم يتم إدخال كود صالح.")
+        return
+
     # Natural language shortcuts
+    if clean_lower in ["دوري", "الدوري", "league", "دوري البوت", "كود الدوري"]:
+        code = get_bot_setting("league_code", "")
+        l_id_str = get_bot_setting("league_id", "")
+        l_id = int(l_id_str) if l_id_str and l_id_str.isdigit() else None
+        text, join_url = FPLService.get_league_info(code, l_id)
+        markup = types.InlineKeyboardMarkup()
+        if join_url:
+            markup.add(types.InlineKeyboardButton("🚀 انضم للدوري مباشرة", url=join_url))
+        markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+        bot.send_message(telegram_id, text, reply_markup=markup)
+        return
+
     if clean_lower in ["ديفرينشال", "الدفرينشال", "differential", "differentials", "diff"]:
         bot.send_message(telegram_id, "⏳ جاري استخراج أفضل ترشيحات الديفرينشال...")
         text = FPLService.get_differentials()
@@ -617,6 +699,19 @@ def handle_callbacks(call):
         bot.send_message(telegram_id, text, reply_markup=markup)
         return
 
+    elif data == "btn_league":
+        code = get_bot_setting("league_code", "")
+        l_id_str = get_bot_setting("league_id", "")
+        l_id = int(l_id_str) if l_id_str and l_id_str.isdigit() else None
+        
+        text, join_url = FPLService.get_league_info(code, l_id)
+        markup = types.InlineKeyboardMarkup()
+        if join_url:
+            markup.add(types.InlineKeyboardButton("🚀 انضم للدوري مباشرة", url=join_url))
+        markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+        bot.send_message(telegram_id, text, reply_markup=markup)
+        return
+
     elif data == "btn_save_team_prompt":
         set_prompt_state(telegram_id, "waiting_team_id_save")
         text = (
@@ -653,6 +748,7 @@ def handle_callbacks(call):
         )
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
+            types.InlineKeyboardButton("⚙️ تعديل كود دوري البوت", callback_data="btn_admin_setleague"),
             types.InlineKeyboardButton("📢 إرسال إعلان إذاعي للكل (Broadcast)", callback_data="btn_admin_broadcast"),
             types.InlineKeyboardButton("🔙 العودة للقائمة", callback_data="btn_main_menu")
         )
@@ -660,6 +756,23 @@ def handle_callbacks(call):
             bot.edit_message_text(text, chat_id=telegram_id, message_id=call.message.message_id, reply_markup=markup)
         except Exception:
             bot.send_message(telegram_id, text, reply_markup=markup)
+        return
+
+    elif data == "btn_admin_setleague":
+        if not is_admin(telegram_id):
+            return
+        set_prompt_state(telegram_id, "waiting_admin_league_code")
+        cur_code = get_bot_setting("league_code", "غير محدد بعد")
+        text = (
+            "⚙️ <b>تعديل كود دوري البوت الرسمي:</b>\n\n"
+            f"الكود الحالي: <code>{cur_code}</code>\n\n"
+            "أرسل الآن في الشات كود الدوري الجديد:\n"
+            "• مثال: <code>abc123xy</code>\n"
+            "• أو الكود مع الآيدي: <code>abc123xy 987654</code>"
+        )
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 إلغاء", callback_data="btn_admin_fpl"))
+        bot.send_message(telegram_id, text, reply_markup=markup)
         return
 
     elif data == "btn_admin_broadcast":
