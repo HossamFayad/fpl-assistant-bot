@@ -763,3 +763,318 @@ class FPLService:
             text += "لا يوجد بدلاء مميزين في حدود هذه الميزانية حالياً.\n\n"
             
         return text
+
+    @classmethod
+    def get_differentials(cls, top_n: int = 4) -> str:
+        players = cls.get_players_list()
+        teams = cls.get_teams_dict()
+        curr, next_ev = cls.get_current_and_next_gw()
+        gw_label = next_ev.get("name") if next_ev else (curr.get("name") if curr else "الجولة")
+        
+        candidates = []
+        for p in players:
+            if p.get("status") != "a":
+                continue
+            try:
+                ownership = float(p.get("selected_by_percent", 0.0))
+                if ownership >= 10.0 or ownership < 0.5:
+                    continue
+                form = float(p.get("form", 0.0))
+                if form < 2.5:
+                    continue
+                cost = p.get("now_cost", 0) / 10.0
+                pts = int(p.get("total_points", 0))
+                
+                fixs = cls.get_player_upcoming_fixtures(p, count=3)
+                if not fixs:
+                    continue
+                fdr_avg = sum(f["fdr"] for f in fixs) / len(fixs)
+                
+                score = (form * 2.5) + ((5.0 - fdr_avg) * 3.0) + ((10.0 - ownership) * 0.5) + (pts * 0.1)
+                candidates.append({
+                    "player": p,
+                    "score": score,
+                    "ownership": ownership,
+                    "form": form,
+                    "cost": cost,
+                    "pts": pts,
+                    "fixs": fixs,
+                    "fdr_avg": fdr_avg
+                })
+            except Exception:
+                continue
+                
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+        top_diffs = candidates[:top_n]
+        
+        if not top_diffs:
+            return "لا تتوفر ترشيحات ديفرينشال حالياً."
+            
+        text = (
+            f"💎 <b>رادار اللاعبين الـ Differential لـ {gw_label}:</b>\n\n"
+            "🎯 <i>لاعيبة سحرية نسبة ملكيتهم أقل من 10% وجدولهم سهل، عشان تفرق عن منافسيك في الترتيب:</i>\n\n"
+        )
+        
+        for i, d in enumerate(top_diffs):
+            p = d["player"]
+            t = teams.get(p.get("team"), {}).get("short_name", "")
+            pos_info = POSITION_MAP.get(p.get("element_type", 1), {"emoji": "⚽", "name": "لاعب"})
+            fix_strs = []
+            for fx in d["fixs"]:
+                ha = "H" if fx["is_home"] else "A"
+                fix_strs.append(f"{fx['opp_short']}({ha}) {cls.format_fdr_emoji(fx['fdr'])}")
+            fix_text = " | ".join(fix_strs)
+            
+            text += (
+                f"✨ <b>{p.get('web_name')}</b> ({t} - £{d['cost']:.1f}m) [{pos_info['emoji']} {pos_info['name']}]\n"
+                f"   • نسبة الملكية: <b>{d['ownership']}% فقط! 🤫</b>\n"
+                f"   • الفورمة: <b>{d['form']}</b> | النقاط: <b>{d['pts']}</b>\n"
+                f"   • المباريات القادمة: {fix_text}\n\n"
+            )
+        return text
+
+    @classmethod
+    def calculate_hit(cls, sell_name: str, buy_name: str) -> str:
+        p_sell = cls.search_player(sell_name)
+        p_buy = cls.search_player(buy_name)
+        
+        if not p_sell or not p_buy:
+            return "⚠️ تعذر العثور على أحد اللاعبين! تأكد من كتابة الاسمين بشكل صحيح (مثال: <code>/hit اكانجي جابرييل</code> أو <code>/hit Eze Palmer</code>)."
+            
+        teams = cls.get_teams_dict()
+        t_sell = teams.get(p_sell.get("team"), {}).get("short_name", "")
+        t_buy = teams.get(p_buy.get("team"), {}).get("short_name", "")
+        
+        fixs_sell = cls.get_player_upcoming_fixtures(p_sell, count=2)
+        fixs_buy = cls.get_player_upcoming_fixtures(p_buy, count=2)
+        
+        fdr_sell = (sum(f["fdr"] for f in fixs_sell) / len(fixs_sell)) if fixs_sell else 3.0
+        fdr_buy = (sum(f["fdr"] for f in fixs_buy) / len(fixs_buy)) if fixs_buy else 3.0
+        
+        form_sell = float(p_sell.get("form", 0.0))
+        form_buy = float(p_buy.get("form", 0.0))
+        
+        status_sell = p_sell.get("status", "a")
+        sell_penalty = -3.0 if status_sell != "a" else 0.0
+        
+        xp_sell = max(1.0, (form_sell * 1.5) + ((5.0 - fdr_sell) * 1.2) + sell_penalty)
+        xp_buy = max(2.0, (form_buy * 1.6) + ((5.0 - fdr_buy) * 1.8))
+        
+        net_gain = round(xp_buy - xp_sell - 4.0, 1)
+        
+        text = (
+            "🧮 <b>حاسبة قرار التبديل بالسالب (-4 Hit Calculator):</b>\n\n"
+            f"🔴 بيع: <b>{p_sell.get('web_name')}</b> ({t_sell}) | نقاط متوقعة للجولتين: ~{xp_sell:.1f}\n"
+            f"🟢 شراء: <b>{p_buy.get('web_name')}</b> ({t_buy}) | نقاط متوقعة للجولتين: ~{xp_buy:.1f}\n"
+            f"⚡ خصم التبديل الإضافي: <b>-4 نقاط</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"📊 <b>صافي الفارق المتوقع بعد خصم الـ 4 نقاط:</b> "
+        )
+        
+        if net_gain >= 1.5:
+            text += (
+                f"<b>+{net_gain} نقطة لصالحك! 🟢</b>\n\n"
+                "✅ <b>القرار الموصى به: نعم، يستاهل تعمل سالب 4!</b>\n"
+                f"مكسب النقاط المتوقع من {p_buy.get('web_name')} يغطي خصم السالب وزيادة واضحة، خصوصاً مع تفوق الفورمة وسهولة الماتشات."
+            )
+        elif net_gain >= -1.0:
+            text += (
+                f"<b>{net_gain} نقطة 🟡</b>\n\n"
+                "⚠️ <b>القرار الموصى به: قرار محايد ومخاطرة متساوية.</b>\n"
+                "الفارق متقارب جداً. إذا كان اللاعب القديم غير مصاب وقادر على اللعب، يفضل ترحيل التبديل للجولة القادمة مجاناً."
+            )
+        else:
+            text += (
+                f"<b>{net_gain} نقطة (خسارة) 🔴</b>\n\n"
+                "⛔ <b>القرار الموصى به: لا يُنصح بالسالب إطلاقاً!</b>\n"
+                "المجازفة بالسالب غير مبررة وستخصم من رصيدك دون تعويض مؤكد في النقاط."
+            )
+            
+        return text
+
+    @classmethod
+    def get_wildcard_squad(cls) -> str:
+        players = cls.get_players_list()
+        teams = cls.get_teams_dict()
+        curr, next_ev = cls.get_current_and_next_gw()
+        gw_label = next_ev.get("name") if next_ev else (curr.get("name") if curr else "الجولة")
+        
+        def get_best_in_pos(pos, min_c, max_c, exclude_teams=None, exclude_pids=None, req_names=None):
+            if not exclude_teams: exclude_teams = {}
+            if not exclude_pids: exclude_pids = set()
+            cands = []
+            for p in players:
+                if p["id"] in exclude_pids: continue
+                if p.get("element_type") != pos: continue
+                cost = p.get("now_cost", 0) / 10.0
+                if not (min_c <= cost <= max_c): continue
+                if p.get("status") not in ["a", "d"]: continue
+                t_id = p.get("team")
+                if exclude_teams.get(t_id, 0) >= 3: continue
+                
+                form = float(p.get("form", 0.0))
+                pts = int(p.get("total_points", 0))
+                fixs = cls.get_player_upcoming_fixtures(p, count=3)
+                fdr_avg = sum(f["fdr"] for f in fixs) / len(fixs) if fixs else 3.0
+                
+                wname = p.get("web_name", "")
+                score = (form * 2.0) + (pts * 0.1) + ((5.0 - fdr_avg) * 3.0)
+                if req_names and wname in req_names:
+                    score += 10.0
+                cands.append({"player": p, "score": score, "cost": cost})
+            cands.sort(key=lambda x: x["score"], reverse=True)
+            return cands[0]["player"] if cands else None
+
+        team_counts = {}
+        chosen_ids = set()
+        
+        haaland = cls.search_player("Haaland")
+        pedro = cls.search_player("João Pedro") or cls.search_player("Pedro")
+        
+        gk1 = get_best_in_pos(1, 4.5, 5.5, team_counts, chosen_ids, ["Raya", "Alisson", "Pickford"])
+        if gk1: chosen_ids.add(gk1["id"]); team_counts[gk1["team"]] = team_counts.get(gk1["team"], 0) + 1
+        gk2 = get_best_in_pos(1, 4.0, 4.0, team_counts, chosen_ids)
+        if gk2: chosen_ids.add(gk2["id"])
+        
+        def1 = get_best_in_pos(2, 5.5, 6.5, team_counts, chosen_ids, ["Gabriel", "Calafiori", "Gvardiol", "Alexander-Arnold"])
+        if def1: chosen_ids.add(def1["id"]); team_counts[def1["team"]] = team_counts.get(def1["team"], 0) + 1
+        def2 = get_best_in_pos(2, 4.5, 5.5, team_counts, chosen_ids)
+        if def2: chosen_ids.add(def2["id"]); team_counts[def2["team"]] = team_counts.get(def2["team"], 0) + 1
+        def3 = get_best_in_pos(2, 4.5, 5.0, team_counts, chosen_ids)
+        if def3: chosen_ids.add(def3["id"]); team_counts[def3["team"]] = team_counts.get(def3["team"], 0) + 1
+        def4 = get_best_in_pos(2, 4.0, 4.5, team_counts, chosen_ids)
+        if def4: chosen_ids.add(def4["id"]); team_counts[def4["team"]] = team_counts.get(def4["team"], 0) + 1
+        def5 = get_best_in_pos(2, 4.0, 4.0, team_counts, chosen_ids)
+        if def5: chosen_ids.add(def5["id"])
+        
+        mid1 = get_best_in_pos(3, 9.0, 11.0, team_counts, chosen_ids, ["Palmer", "Saka", "Salah", "Foden"])
+        if mid1: chosen_ids.add(mid1["id"]); team_counts[mid1["team"]] = team_counts.get(mid1["team"], 0) + 1
+        mid2 = get_best_in_pos(3, 7.5, 9.0, team_counts, chosen_ids, ["Cherki", "Mbeumo", "Rogers"])
+        if mid2: chosen_ids.add(mid2["id"]); team_counts[mid2["team"]] = team_counts.get(mid2["team"], 0) + 1
+        mid3 = get_best_in_pos(3, 6.5, 7.5, team_counts, chosen_ids)
+        if mid3: chosen_ids.add(mid3["id"]); team_counts[mid3["team"]] = team_counts.get(mid3["team"], 0) + 1
+        mid4 = get_best_in_pos(3, 5.5, 6.5, team_counts, chosen_ids)
+        if mid4: chosen_ids.add(mid4["id"]); team_counts[mid4["team"]] = team_counts.get(mid4["team"], 0) + 1
+        mid5 = get_best_in_pos(3, 4.5, 5.5, team_counts, chosen_ids)
+        if mid5: chosen_ids.add(mid5["id"])
+        
+        fwd1 = haaland if haaland else get_best_in_pos(4, 12.0, 16.0)
+        if fwd1: chosen_ids.add(fwd1["id"]); team_counts[fwd1["team"]] = team_counts.get(fwd1["team"], 0) + 1
+        fwd2 = pedro if pedro else get_best_in_pos(4, 7.0, 8.5)
+        if fwd2: chosen_ids.add(fwd2["id"]); team_counts[fwd2["team"]] = team_counts.get(fwd2["team"], 0) + 1
+        fwd3 = get_best_in_pos(4, 5.0, 6.5, team_counts, chosen_ids)
+        if fwd3: chosen_ids.add(fwd3["id"])
+        
+        starters = [gk1, def1, def2, def3, mid1, mid2, mid3, mid4, fwd1, fwd2, fwd3]
+        bench = [gk2, def4, def5, mid5]
+        all_p = [p for p in starters + bench if p]
+        total_cost = sum(p.get("now_cost", 0) for p in all_p) / 10.0
+        
+        def fmt_p(p):
+            t = teams.get(p.get("team"), {}).get("short_name", "")
+            c = p.get("now_cost", 0) / 10.0
+            return f"• <b>{p.get('web_name')}</b> ({t} - £{c:.1f}m)"
+
+        text = (
+            f"🃏 <b>تشكيلة الـ Wildcard المثالية بالذكاء الاصطناعي لـ {gw_label}:</b>\n\n"
+            f"💰 إجمالي تكلفة التشكيلة: <b>£{total_cost:.1f}m</b> / 100.0m\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🏆 <b>التشكيل الأساسي الموصى به (3-4-3):</b>\n\n"
+            f"🧤 <b>حراسة المرمى:</b>\n{fmt_p(gk1) if gk1 else ''}\n\n"
+            f"🛡️ <b>خط الدفاع:</b>\n" + "\n".join([fmt_p(p) for p in [def1, def2, def3] if p]) + "\n\n"
+            f"🎯 <b>خط الوسط:</b>\n" + "\n".join([fmt_p(p) for p in [mid1, mid2, mid3, mid4] if p]) + "\n\n"
+            f"⚽ <b>خط الهجوم:</b>\n" + "\n".join([fmt_p(p) for p in [fwd1, fwd2, fwd3] if p]) + "\n\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🪑 <b>مقاعد البدلاء (Bench):</b>\n" + "\n".join([fmt_p(p) for p in bench if p]) + "\n\n"
+            f"👑 <b>الكابتن المقترح:</b> <b>{fwd1.get('web_name') if fwd1 else (mid1.get('web_name') if mid1 else 'Haaland')}</b>\n"
+            "💡 <i>التشكيلة مبنية رياضياً على أعلى سقف نقاط متوقع للفورمة وسهولة الجولات الـ 5 القادمة.</i>"
+        )
+        return text
+
+    @classmethod
+    def get_set_piece_takers(cls, team_name_query: str = None) -> str:
+        players = cls.get_players_list()
+        teams = cls.get_teams_dict()
+        
+        target_team_id = None
+        target_team_name = None
+        if team_name_query:
+            q = team_name_query.strip().lower()
+            for tid, t in teams.items():
+                if q in t.get("name", "").lower() or q in t.get("short_name", "").lower():
+                    target_team_id = tid
+                    target_team_name = t.get("name")
+                    break
+                    
+        if target_team_id:
+            t_players = [p for p in players if p.get("team") == target_team_id]
+            pens = sorted([p for p in t_players if p.get("penalties_order")], key=lambda x: x["penalties_order"])
+            fk = sorted([p for p in t_players if p.get("direct_freekicks_order")], key=lambda x: x["direct_freekicks_order"])
+            corners = sorted([p for p in t_players if p.get("corners_and_indirect_freekicks_order")], key=lambda x: x["corners_and_indirect_freekicks_order"])
+            
+            text = f"🎯 <b>مسددو الكرات الثابتة لنادي {target_team_name}:</b>\n\n"
+            text += "⚽ <b>ضربات الجزاء (Penalties):</b>\n" + ("\n".join([f"  {p['penalties_order']}. <b>{p.get('web_name')}</b>" for p in pens[:2]]) if pens else "  غير محدد رسمياً") + "\n\n"
+            text += "🚀 <b>الضربات الحرة المباشرة (Free Kicks):</b>\n" + ("\n".join([f"  {p['direct_freekicks_order']}. <b>{p.get('web_name')}</b>" for p in fk[:2]]) if fk else "  غير محدد") + "\n\n"
+            text += "📐 <b>الركنيات والرفعات (Corners):</b>\n" + ("\n".join([f"  {p['corners_and_indirect_freekicks_order']}. <b>{p.get('web_name')}</b>" for p in corners[:2]]) if corners else "  غير محدد") + "\n"
+            return text
+        else:
+            lines = []
+            for tid, t in sorted(teams.items(), key=lambda x: x[1]["name"]):
+                p_pk = [p for p in players if p.get("team") == tid and p.get("penalties_order") == 1]
+                pk_name = p_pk[0].get("web_name") if p_pk else "متغير"
+                lines.append(f"• <b>{t['short_name']}</b>: {pk_name}")
+                
+            text = (
+                "🎯 <b>مسددو ضربات الجزاء الرسميون في الدوري الإنجليزي:</b>\n\n"
+                + "\n".join(lines)
+                + "\n\n💡 <i>لمعرفة مسددي الفاولات والركنيات لنادي معين، اكتب: <code>/setpiece Arsenal</code> أو <code>/setpiece Chelsea</code></i>"
+            )
+            return text
+
+    @classmethod
+    def get_budget_rotation_pairs(cls) -> str:
+        teams = cls.get_teams_dict()
+        players = cls.get_players_list()
+        
+        budget_defs = [p for p in players if p.get("element_type") == 2 and p.get("now_cost", 0) <= 46 and p.get("status") == "a" and int(p.get("total_points", 0)) >= 15]
+        budget_defs.sort(key=lambda x: float(x.get("form", 0.0)), reverse=True)
+        
+        d1 = budget_defs[0] if budget_defs else None
+        d2 = None
+        if d1:
+            for d in budget_defs[1:]:
+                if d.get("team") != d1.get("team"):
+                    d2 = d
+                    break
+                    
+        if not d1 or not d2:
+            return "لا تتوفر بيانات كافية لثنائيات التدوير حالياً."
+            
+        t1 = teams.get(d1.get("team"), {}).get("short_name", "")
+        t2 = teams.get(d2.get("team"), {}).get("short_name", "")
+        c1 = d1.get("now_cost", 0) / 10.0
+        c2 = d2.get("now_cost", 0) / 10.0
+        
+        fixs1 = cls.get_player_upcoming_fixtures(d1, count=4)
+        fixs2 = cls.get_player_upcoming_fixtures(d2, count=4)
+        
+        lines = []
+        for i in range(min(len(fixs1), len(fixs2))):
+            f1 = fixs1[i]
+            f2 = fixs2[i]
+            better = d1 if f1["fdr"] <= f2["fdr"] else d2
+            better_f = f1 if f1["fdr"] <= f2["fdr"] else f2
+            ha = "H" if better_f["is_home"] else "A"
+            lines.append(f"• GW{better_f['event']}: العب بـ <b>{better.get('web_name')}</b> ضد {better_f['opp_short']}({ha}) {cls.format_fdr_emoji(better_f['fdr'])}")
+            
+        text = (
+            "🛡️ <b>أفضل ثنائي دفاعي رخيص للتدوير (Budget Rotation Pair):</b>\n\n"
+            f"1️⃣ <b>{d1.get('web_name')}</b> ({t1} - £{c1:.1f}m)\n"
+            f"2️⃣ <b>{d2.get('web_name')}</b> ({t2} - £{c2:.1f}m)\n"
+            f"💰 التكلفة الإجمالية للثنائي: <b>£{(c1+c2):.1f}m فقط!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🗓️ <b>جدول تدوير الأساسي لكل جولة (العب بالأسهل بينهم):</b>\n\n"
+            + "\n".join(lines)
+            + "\n\n💡 <i>الفكرة: توفير ميزانية خط الوسط والهجوم باللعب دائماً بالمدافع صاحب المواجهة الأسهل.</i>"
+        )
+        return text

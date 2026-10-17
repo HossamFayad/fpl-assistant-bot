@@ -25,16 +25,24 @@ def get_main_menu_markup(telegram_id: int = None):
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_rmt = types.InlineKeyboardButton("🔍 تحليل فريقي (Rate My Team)", callback_data="btn_rmt")
     btn_transfer = types.InlineKeyboardButton("🔄 اقتراح تبديل ذكي (مين تبيع وتشتري)", callback_data="btn_transfers")
+    btn_wildcard = types.InlineKeyboardButton("🃏 تشكيلة Wildcard بالذكاء الاصطناعي", callback_data="btn_wildcard")
     btn_captain = types.InlineKeyboardButton("👑 ترشيحات الكابتن", callback_data="btn_captain")
+    btn_diff = types.InlineKeyboardButton("💎 رادار الديفرينشال (<10%)", callback_data="btn_diff")
+    btn_hit = types.InlineKeyboardButton("🧮 حاسبة سالب 4 (-4)", callback_data="btn_hit_prompt")
     btn_compare = types.InlineKeyboardButton("⚔️ مقارنة لاعبين", callback_data="btn_compare_prompt")
+    btn_setpiece = types.InlineKeyboardButton("🎯 مسددو الجزاء والكرات الثابتة", callback_data="btn_setpiece")
+    btn_rotation = types.InlineKeyboardButton("🛡️ التدوير الدفاعي الرخيص (£4.5m)", callback_data="btn_rotation")
     btn_price = types.InlineKeyboardButton("📈 رادار تغير الأسعار", callback_data="btn_price_watch")
-    btn_deadline = types.InlineKeyboardButton("⏳ الديدلاين والوقت المتبقي", callback_data="btn_deadline")
+    btn_deadline = types.InlineKeyboardButton("⏳ موعد الديدلاين", callback_data="btn_deadline")
     btn_save = types.InlineKeyboardButton("💾 حفظ رقم فريقي", callback_data="btn_save_team_prompt")
     btn_guide = types.InlineKeyboardButton("ℹ️ كيف تعرف رقم فريقك؟", callback_data="btn_help_id")
     
     markup.add(btn_rmt)
     markup.add(btn_transfer)
-    markup.add(btn_captain, btn_compare)
+    markup.add(btn_wildcard)
+    markup.add(btn_captain, btn_diff)
+    markup.add(btn_hit, btn_compare)
+    markup.add(btn_setpiece, btn_rotation)
     markup.add(btn_price, btn_deadline)
     markup.add(btn_save, btn_guide)
     
@@ -198,6 +206,61 @@ def handle_player_command(message):
     else:
         bot.send_message(telegram_id, "⚠️ اكتب اسم اللاعب بعد الأمر، مثلاً: <code>/player هالاند</code>")
 
+@bot.message_handler(commands=['diff', 'differentials'])
+def handle_diff_command(message):
+    bot.send_message(message.chat.id, "⏳ جاري استخراج أفضل ترشيحات الديفرينشال...")
+    text = FPLService.get_differentials()
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+    bot.send_message(message.chat.id, text, reply_markup=markup)
+
+@bot.message_handler(commands=['wildcard', 'wc'])
+def handle_wildcard_command(message):
+    bot.send_message(message.chat.id, "⏳ جاري بناء تشكيلة الـ Wildcard بالذكاء الاصطناعي...")
+    text = FPLService.get_wildcard_squad()
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+    bot.send_message(message.chat.id, text, reply_markup=markup)
+
+@bot.message_handler(commands=['hit'])
+def handle_hit_command(message):
+    telegram_id = message.chat.id
+    parts = message.text.replace("/hit", "").strip().split()
+    if len(parts) >= 2:
+        res = FPLService.calculate_hit(parts[0], parts[1])
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+        bot.send_message(telegram_id, res, reply_markup=markup)
+    else:
+        set_prompt_state(telegram_id, "waiting_hit_players")
+        text = (
+            "🧮 <b>حاسبة قرار سالب 4 (-4 Hit Calculator):</b>\n\n"
+            "اكتب الآن في الشات اسم اللاعب الذي تريد بيعه ثم اللاعب الذي تريد شراءه بينهما مسافة:\n\n"
+            "• مثال: <code>ايزاك بيدرو</code>\n"
+            "• مثال: <code>Eze Palmer</code>\n"
+            "• مثال: <code>وود هالاند</code>"
+        )
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 إلغاء", callback_data="btn_main_menu"))
+        bot.send_message(telegram_id, text, reply_markup=markup)
+
+@bot.message_handler(commands=['setpiece', 'setpieces', 'penalties', 'pens'])
+def handle_setpiece_command(message):
+    telegram_id = message.chat.id
+    team_query = message.text.replace("/setpiece", "").replace("/setpieces", "").replace("/penalties", "").replace("/pens", "").strip()
+    text = FPLService.get_set_piece_takers(team_query if team_query else None)
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+    bot.send_message(telegram_id, text, reply_markup=markup)
+
+@bot.message_handler(commands=['rotation', 'pairs'])
+def handle_rotation_command(message):
+    telegram_id = message.chat.id
+    text = FPLService.get_budget_rotation_pairs()
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+    bot.send_message(telegram_id, text, reply_markup=markup)
+
 @bot.message_handler(commands=['admin'])
 def handle_admin_command(message):
     telegram_id = message.chat.id
@@ -283,6 +346,19 @@ def handle_text_messages(message):
             bot.send_message(telegram_id, "⚠️ يرجى كتابة اسم اللاعبين بينهما مسافة، مثلاً: <code>بالمر ساكا</code>")
             return
 
+    elif state == "waiting_hit_players":
+        clear_prompt_state(telegram_id)
+        names = text_val.split()
+        if len(names) >= 2:
+            res = FPLService.calculate_hit(names[0], names[1])
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+            bot.send_message(telegram_id, res, reply_markup=markup)
+            return
+        else:
+            bot.send_message(telegram_id, "⚠️ يرجى كتابة اسم اللاعبين بينهما مسافة، مثلاً: <code>ايزاك بيدرو</code> أو <code>Eze Palmer</code>")
+            return
+
     elif is_admin(telegram_id) and state == "waiting_broadcast_text":
         clear_prompt_state(telegram_id)
         users = get_all_user_ids()
@@ -295,6 +371,47 @@ def handle_text_messages(message):
                 pass
         bot.send_message(telegram_id, f"✅ تم إرسال الإعلان بنجاح إلى <b>{sent}</b> مستخدم!")
         return
+
+    # Natural language shortcuts
+    if clean_lower in ["ديفرينشال", "الدفرينشال", "differential", "differentials", "diff"]:
+        bot.send_message(telegram_id, "⏳ جاري استخراج أفضل ترشيحات الديفرينشال...")
+        text = FPLService.get_differentials()
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+        bot.send_message(telegram_id, text, reply_markup=markup)
+        return
+
+    if clean_lower in ["وايلد كارد", "وايلدكارد", "wildcard", "wc"]:
+        bot.send_message(telegram_id, "⏳ جاري بناء تشكيلة الـ Wildcard بالذكاء الاصطناعي...")
+        text = FPLService.get_wildcard_squad()
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+        bot.send_message(telegram_id, text, reply_markup=markup)
+        return
+
+    if clean_lower in ["بلنتيات", "ضربات جزاء", "ضربات الجزاء", "فاولات", "penalties", "setpiece"]:
+        text = FPLService.get_set_piece_takers()
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+        bot.send_message(telegram_id, text, reply_markup=markup)
+        return
+
+    if clean_lower in ["تدوير", "تدوير دفاعي", "تدوير الدفاع", "rotation"]:
+        text = FPLService.get_budget_rotation_pairs()
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+        bot.send_message(telegram_id, text, reply_markup=markup)
+        return
+
+    if clean_lower.startswith("سالب 4 ") or clean_lower.startswith("سالب4 ") or clean_lower.startswith("hit "):
+        clean_text = re.sub(r'^(سالب 4|سالب4|hit)\s+', '', text_val, flags=re.IGNORECASE).strip()
+        names = clean_text.split()
+        if len(names) >= 2:
+            res = FPLService.calculate_hit(names[0], names[1])
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+            bot.send_message(telegram_id, res, reply_markup=markup)
+            return
 
     # Check if user sent a player name directly (e.g. "هالاند" or "Palmer")
     player = FPLService.search_player(text_val)
@@ -451,6 +568,50 @@ def handle_callbacks(call):
             f"{dl.get('countdown')}\n\n"
             "💡 <i>تأكد من إنهاء كافة التبديلات وتثبيت الكابتن قبل موعد الديدلاين بساعة على الأقل لتجنب ضغط السيرفرات.</i>"
         )
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+        bot.send_message(telegram_id, text, reply_markup=markup)
+        return
+
+    elif data == "btn_diff":
+        bot.send_message(telegram_id, "⏳ جاري استخراج أفضل ترشيحات الديفرينشال...")
+        text = FPLService.get_differentials()
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+        bot.send_message(telegram_id, text, reply_markup=markup)
+        return
+
+    elif data == "btn_wildcard":
+        bot.send_message(telegram_id, "⏳ جاري بناء تشكيلة الـ Wildcard بالذكاء الاصطناعي...")
+        text = FPLService.get_wildcard_squad()
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+        bot.send_message(telegram_id, text, reply_markup=markup)
+        return
+
+    elif data == "btn_hit_prompt":
+        set_prompt_state(telegram_id, "waiting_hit_players")
+        text = (
+            "🧮 <b>حاسبة قرار سالب 4 (-4 Hit Calculator):</b>\n\n"
+            "اكتب الآن في الشات اسم اللاعب الذي تريد بيعه ثم اللاعب الذي تريد شراءه بينهما مسافة:\n\n"
+            "• مثال: <code>ايزاك بيدرو</code>\n"
+            "• مثال: <code>Eze Palmer</code>\n"
+            "• مثال: <code>وود هالاند</code>"
+        )
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 إلغاء والعودة", callback_data="btn_main_menu"))
+        bot.send_message(telegram_id, text, reply_markup=markup)
+        return
+
+    elif data == "btn_setpiece":
+        text = FPLService.get_set_piece_takers()
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+        bot.send_message(telegram_id, text, reply_markup=markup)
+        return
+
+    elif data == "btn_rotation":
+        text = FPLService.get_budget_rotation_pairs()
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
         bot.send_message(telegram_id, text, reply_markup=markup)
