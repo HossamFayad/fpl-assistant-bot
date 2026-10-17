@@ -177,45 +177,23 @@ def handle_text_messages(message):
     text_val = message.text.strip()
     state = get_prompt_state(telegram_id)
     
-    if state == "waiting_team_id_rmt":
+    # PRIORITY 1: If user sent any number, treat it immediately as FPL Team ID!
+    if text_val.isdigit():
         clear_prompt_state(telegram_id)
-        if text_val.isdigit():
-            team_id = int(text_val)
+        team_id = int(text_val)
+        bot.send_message(telegram_id, "⏳ جاري سحب بيانات تشكيلتك من سيرفرات البريميرليج وفحصها...")
+        try:
             report, entry = FPLService.get_team_analysis(team_id)
             if entry:
                 save_user_team(telegram_id, team_id, entry.get("name", ""), entry.get("player_first_name", ""))
             markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🔄 فحص فريق آخر", callback_data="btn_rmt_new"))
             markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
             bot.send_message(telegram_id, report, reply_markup=markup)
-            return
-        else:
-            bot.send_message(telegram_id, "⚠️ يرجى إرسال أرقام فقط (رقم الـ ID الخاص بفريقك).")
-            return
-            
-    elif state == "waiting_team_id_save":
-        clear_prompt_state(telegram_id)
-        if text_val.isdigit():
-            team_id = int(text_val)
-            report, entry = FPLService.get_team_analysis(team_id)
-            if entry:
-                save_user_team(telegram_id, team_id, entry.get("name", ""), entry.get("player_first_name", ""))
-                msg_text = (
-                    f"✅ <b>تم حفظ فريقك بنجاح!</b> 🏆\n\n"
-                    f"🛡️ <b>اسم الفريق:</b> {entry.get('name')}\n"
-                    f"👤 <b>المدرب:</b> {entry.get('player_first_name')} {entry.get('player_last_name')}\n"
-                    f"🔢 <b>الآيدي:</b> <code>{team_id}</code>\n\n"
-                    "الآن يمكنك فحص تشكيلتك بنقرة واحدة في أي وقت بدون إعادة إدخال الرقم!"
-                )
-            else:
-                msg_text = "⚠️ لم نتمكن من جلب بيانات الفريق، تأكد من صحة رقم الآيدي."
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("🔍 فحص تشكيلتي الآن", callback_data="btn_rmt"))
-            markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
-            bot.send_message(telegram_id, msg_text, reply_markup=markup)
-            return
-        else:
-            bot.send_message(telegram_id, "⚠️ يرجى إرسال أرقام فقط (رقم الـ ID الخاص بفريقك).")
-            return
+        except Exception as e:
+            print(f"[RMTException] {e}")
+            bot.send_message(telegram_id, "⚠️ حدث خطأ أثناء فحص الفريق. تأكد من أن رقم الـ ID صحيح (رقم فريقك وليس رقم دوري).")
+        return
             
     elif state == "waiting_compare_names":
         clear_prompt_state(telegram_id)
@@ -296,11 +274,16 @@ def handle_callbacks(call):
     elif data == "btn_rmt":
         saved = get_user_team(telegram_id)
         if saved and saved.get("team_id"):
-            report, _ = FPLService.get_team_analysis(int(saved["team_id"]))
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("🔄 فحص فريق آخر", callback_data="btn_rmt_new"))
-            markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
-            bot.send_message(telegram_id, report, reply_markup=markup)
+            bot.send_message(telegram_id, f"⏳ جاري فحص تشكيلة فريقك المسجل (<b>{saved.get('team_name', 'فريقي')}</b>)...")
+            try:
+                report, _ = FPLService.get_team_analysis(int(saved["team_id"]))
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton("🔄 فحص فريق آخر", callback_data="btn_rmt_new"))
+                markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="btn_main_menu"))
+                bot.send_message(telegram_id, report, reply_markup=markup)
+            except Exception as e:
+                print(f"[RMTCallbackError] {e}")
+                bot.send_message(telegram_id, "⚠️ تعذر جلب تشكيلة الفريق المسجل حالياً، أرسل رقم فريقك مرة أخرى لتحديثه.")
         else:
             set_prompt_state(telegram_id, "waiting_team_id_rmt")
             text = (
@@ -309,13 +292,14 @@ def handle_callbacks(call):
                 "💡 <i>(يمكنك معرفة الرقم بفتح حسابك على موقع الفانتسي ثم الضغط على Points، ستجد الرقم في رابط الصفحة)</i>."
             )
             markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("ℹ️ كيف أجد رقم فريقي؟", callback_data="btn_help_id"))
             markup.add(types.InlineKeyboardButton("🔙 إلغاء", callback_data="btn_main_menu"))
             bot.send_message(telegram_id, text, reply_markup=markup)
         return
 
     elif data == "btn_rmt_new":
         set_prompt_state(telegram_id, "waiting_team_id_rmt")
-        text = "🔍 أرسل الآن في الشات رقم الـ ID بتاع الفريق الذي تريد فحصه:"
+        text = "🔍 أرسل الآن في الشات رقم الـ ID بتاع الفريق الذي تريد فحصه (أرقام فقط):"
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🔙 إلغاء", callback_data="btn_main_menu"))
         bot.send_message(telegram_id, text, reply_markup=markup)

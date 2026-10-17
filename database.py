@@ -100,66 +100,87 @@ def init_db():
         conn.commit()
         conn.close()
 
+MEM_USER_TEAMS: Dict[int, Dict[str, Any]] = {}
+MEM_PROMPT_STATES: Dict[int, str] = {}
+
 def save_user_team(telegram_id: int, team_id: int, team_name: str = "", manager_name: str = ""):
-    if USE_TURSO:
-        sql = """
-        INSERT OR REPLACE INTO fpl_users (telegram_id, team_id, team_name, manager_name, last_active)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-        """
-        turso_execute(sql, [telegram_id, team_id, team_name, manager_name])
-    else:
+    t_id = int(telegram_id)
+    MEM_USER_TEAMS[t_id] = {
+        "telegram_id": t_id,
+        "team_id": int(team_id),
+        "team_name": team_name,
+        "manager_name": manager_name
+    }
+    try:
         conn = get_sqlite_conn()
         cursor = conn.cursor()
         cursor.execute("""
         INSERT OR REPLACE INTO fpl_users (telegram_id, team_id, team_name, manager_name, last_active)
         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-        """, (telegram_id, team_id, team_name, manager_name))
+        """, (t_id, team_id, team_name, manager_name))
         conn.commit()
         conn.close()
+    except Exception as e:
+        print(f"[SQLiteSaveError] {e}")
 
 def get_user_team(telegram_id: int) -> Optional[Dict[str, Any]]:
-    if USE_TURSO:
-        res = turso_execute("SELECT * FROM fpl_users WHERE telegram_id = ?", [telegram_id])
-        return res[0] if res else None
-    else:
+    t_id = int(telegram_id)
+    if t_id in MEM_USER_TEAMS:
+        return MEM_USER_TEAMS[t_id]
+    try:
         conn = get_sqlite_conn()
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM fpl_users WHERE telegram_id = ?", (telegram_id,))
+        cursor.execute("SELECT * FROM fpl_users WHERE telegram_id = ?", (t_id,))
         row = cursor.fetchone()
         conn.close()
-        return dict(row) if row else None
+        if row:
+            res = dict(row)
+            MEM_USER_TEAMS[t_id] = res
+            return res
+    except Exception as e:
+        print(f"[SQLiteGetError] {e}")
+    return None
 
 def set_prompt_state(telegram_id: int, state: str):
-    if USE_TURSO:
-        turso_execute("INSERT OR REPLACE INTO fpl_user_state (telegram_id, prompt_state) VALUES (?, ?)", [telegram_id, state])
-    else:
+    t_id = int(telegram_id)
+    MEM_PROMPT_STATES[t_id] = state
+    try:
         conn = get_sqlite_conn()
         cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO fpl_user_state (telegram_id, prompt_state) VALUES (?, ?)", (telegram_id, state))
+        cursor.execute("INSERT OR REPLACE INTO fpl_user_state (telegram_id, prompt_state) VALUES (?, ?)", (t_id, state))
         conn.commit()
         conn.close()
+    except Exception:
+        pass
 
 def get_prompt_state(telegram_id: int) -> Optional[str]:
-    if USE_TURSO:
-        res = turso_execute("SELECT prompt_state FROM fpl_user_state WHERE telegram_id = ?", [telegram_id])
-        return res[0].get("prompt_state") if res else None
-    else:
+    t_id = int(telegram_id)
+    if t_id in MEM_PROMPT_STATES:
+        return MEM_PROMPT_STATES[t_id]
+    try:
         conn = get_sqlite_conn()
         cursor = conn.cursor()
-        cursor.execute("SELECT prompt_state FROM fpl_user_state WHERE telegram_id = ?", (telegram_id,))
+        cursor.execute("SELECT prompt_state FROM fpl_user_state WHERE telegram_id = ?", (t_id,))
         row = cursor.fetchone()
         conn.close()
-        return row[0] if row else None
+        if row:
+            MEM_PROMPT_STATES[t_id] = row[0]
+            return row[0]
+    except Exception:
+        pass
+    return None
 
 def clear_prompt_state(telegram_id: int):
-    if USE_TURSO:
-        turso_execute("DELETE FROM fpl_user_state WHERE telegram_id = ?", [telegram_id])
-    else:
+    t_id = int(telegram_id)
+    MEM_PROMPT_STATES.pop(t_id, None)
+    try:
         conn = get_sqlite_conn()
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM fpl_user_state WHERE telegram_id = ?", (telegram_id,))
+        cursor.execute("DELETE FROM fpl_user_state WHERE telegram_id = ?", (t_id,))
         conn.commit()
         conn.close()
+    except Exception:
+        pass
 
 def get_all_user_ids() -> List[int]:
     if USE_TURSO:

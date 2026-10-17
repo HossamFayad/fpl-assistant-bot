@@ -378,17 +378,20 @@ class FPLService:
         overall_rank = entry_data.get("summary_overall_rank", 0)
         gw_pts = entry_data.get("summary_event_points", 0)
         
-        curr, next_ev = cls.get_current_and_next_gw()
-        gw_to_fetch = curr.get("id") if curr else 1
-        
-        # 2. Fetch Picks
-        picks_data = _get_with_cache(FPL_PICKS_URL.format(team_id=team_id, gw=gw_to_fetch), ttl=120)
-        if not picks_data:
-            # Fallback to previous GW
-            picks_data = _get_with_cache(FPL_PICKS_URL.format(team_id=team_id, gw=max(1, gw_to_fetch - 1)), ttl=120)
+        curr_ev = entry_data.get("current_event")
+        if not curr_ev:
+            curr, _ = cls.get_current_and_next_gw()
+            curr_ev = curr.get("id") if curr else 1
+            
+        picks_data = None
+        for try_gw in range(curr_ev, 0, -1):
+            p_data = _get_with_cache(FPL_PICKS_URL.format(team_id=team_id, gw=try_gw), ttl=120)
+            if p_data and "picks" in p_data and len(p_data.get("picks", [])) > 0:
+                picks_data = p_data
+                break
             
         if not picks_data or "picks" not in picks_data:
-            return (f"✅ تم العثور على فريق <b>{team_name}</b> ولكن تشكيلة الجولة لم تكتمل بعد على خوادم البريميرليج.", entry_data)
+            return (f"✅ تم العثور على فريق <b>{team_name}</b> (المدرب: {mgr_name})، ولكن تشكيلة الجولة لم تكتمل بعد على خوادم البريميرليج.", entry_data)
             
         picks = picks_data.get("picks", [])
         players_dict = {p["id"]: p for p in cls.get_players_list()}
